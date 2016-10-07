@@ -1,4 +1,3 @@
-
 #storm_raw<-read.csv("repdata-data-StormData.csv.bz2")
 
 #Clean data
@@ -43,4 +42,5 @@ damages_merge$TOTALDMG=
  the_na<-subset(damages_merge,is.na(TOTALDMG))
 damages_agg<-aggregate(x=damages_merge[c("TOTALDMG")],list(damages_merge$EVTYPE),sum)
 names(damages_agg)[1]<-c("EVTYPE")
+damages_agg<-subset(damages_agg,TOTALDMG>0)
 damages_agg<-damages_agg[with(damages_agg,order(-TOTALDMG)),]
