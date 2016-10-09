@@ -4,6 +4,10 @@ output:
   html_document:
     keep_md: true
 ---
+#Synopsys
+In this analysis we calculate which events are most harmfull to human health and which have the biggest economic impact. We start from the raw storm events data from NOAA (available here: https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2). We do some data cleaning (removing non continental events, cleaning the labels and typos). Afterwards we aggregate the injuries per event type. We also calculate the economic impact per event and aggregate it per event type.
+At the end, we present a couple of plots with the top 20 of events with most impact on human health and economy. For more details, the complete per event aggregated data is at the end of the analysis.
+
 #Data Processing
 ##Load Data
 First load the raw data from the bz2 file
@@ -28,72 +32,157 @@ storm_clean$EVTYPE<-gsub("S$| $|^ ","",storm_clean$EVTYPE) #Remove ending S, lea
 storm_clean$EVTYPE<-gsub(" +"," ",storm_clean$EVTYPE) #Remove repeating spaces
 storm_clean$EVTYPE<-gsub("/"," ",storm_clean$EVTYPE) #Remove backlash (some items have, other have spaces)
 storm_clean$EVTYPE<-gsub("T.*STORM|T.*STORMS|TSTM","THUNDERSTORM",storm_clean$EVTYPE) #Correct many types with Thunderstorm
+proper=function(x) paste0(toupper(substr(x, 1, 1)), tolower(substring(x, 2)))
+storm_clean$EVTYPE<-proper(storm_clean$EVTYPE)
 ```
 
 ##Analysis
 ###Injuries per event type
-We aggregate the results per Event Type. We keep only those for which the number of injuries is greater than zero.
+We want to have a view on the events with most impact on human health. We will use the "Injuries" column in the data set to measure this impact. We aggregate the results per Event Type. We keep only those for which the number of injuries is greater than zero.
 ```{r}
-fatalities<-aggregate(x=storm_clean[c("INJURIES","FATALITIES")],list(storm_clean$EVTYPE),sum)
+#Select only Injuries and Fatalities columns and aggregate per event type
+fatalities<-aggregate(
+  x=storm_clean[c("INJURIES","FATALITIES")],
+  list(storm_clean$EVTYPE),
+  sum)
 names(fatalities)[1]<-c("EVTYPE")
+#Keep only fatalities with number of injuries greater than zero
 fatalities<-subset(fatalities,INJURIES>0)
+#Order descending
+fatalities<-fatalities[with(fatalities,order(-INJURIES,EVTYPE)),]
 ```
 
 ###Total economical damage per event type
-We create a multipliers data frame to convert from an exponent (h,k,m...) to a numerical value.
-We follow the analysis shown here https://rstudio-pubs-static.s3.amazonaws.com/58957_37b6723ee52b455990e149edde45e5b6.html
+The economic impact is derived from columns:
+
+* PROPDMG: Property Damage
+* CROPDMG: Crop Damage
+* PROPDMGEXP: Property damage exponent
+* CROPDMGEXP: Crop damage exponent
+
+We create a multipliers data frame to convert from an exponent (columns PROPDMGEXP and CROPDMGEXP) to a numerical value. For instance, we will convert values such as h, k or m to numbers 100, 1,000 or 1,000,000. This requires some data cleansing on the EXP columns (all to upper case, replace symbols with the same meaning to a single one)
+We follow the conversion findings shown in the following article:
+ https://rstudio-pubs-static.s3.amazonaws.com/58957_37b6723ee52b455990e149edde45e5b6.html
+These exponent multipliers are then used to calculate a Total damage (in $) from the PROPDMG and CROPDMG columns.
 ```{r}
 multipliers<-data.frame(c("H","K","M","B","+","-","?","1"),c(100,1000,1000000,1000000000,1,0,0,10))
-names(multipliers)<-c("code","PROPDMGMULT")
+names(multipliers)<-c("code","PROPDMGMULT") #Create data frame xwith multipliers
+#Keep only columns relevant for this analysis
 damages<-storm_clean[c("EVTYPE","PROPDMGEXP","CROPDMGEXP","PROPDMG","CROPDMG")]
 damages$PROPDMGEXP<-toupper(damages$PROPDMGEXP)
 damages$CROPDMGEXP<-toupper(damages$CROPDMGEXP)
 damages$PROPDMGEXP<-sub("[0-9]|^$","1",damages$PROPDMGEXP) #Replace numerics and empty by 1
 damages$CROPDMGEXP<-sub("[0-9]|^$","1",damages$CROPDMGEXP) #Replace numerics and empty by 1
+ #Lookup multipliers for PROPDMGEXP
 damages_merge<-merge(damages,multipliers,by.x=c("PROPDMGEXP"),by.y=c("code"),all.x=TRUE)
 names(multipliers)<-c("code","CROPDMGMULT")
+#Lookup multipliers for CROPDMGEXP
 damages_merge<-merge(damages_merge,multipliers,by.x=c("CROPDMGEXP"),by.y=c("code"),all.x=TRUE)
+#Calculate total damage
 damages_merge$TOTALDMG=
 	damages_merge$CROPDMG*damages_merge$CROPDMGMULT+
 	damages_merge$PROPDMG*damages_merge$PROPDMGMULT
  the_na<-subset(damages_merge,is.na(TOTALDMG))
 damages_agg<-aggregate(x=damages_merge[c("TOTALDMG")],list(damages_merge$EVTYPE),sum)
+#Aggregate per event type
 names(damages_agg)[1]<-c("EVTYPE")
+#Remove results where damage is zero
 damages_agg<-subset(damages_agg,TOTALDMG>0)
+#Sort descending
 damages_agg<-damages_agg[with(damages_agg,order(-TOTALDMG)),]
 ```
 
 #Results
 ##Summary
 ### Injuries per event type
-Following graph shows total number of injuries for 19 most impacting events, the other category aggregates all other results. The table in the *Detailed result* section shows all data
+Following graph shows total number of injuries for top 20 most impacting events. The table in the *Detailed result* section shows all data
 ```{r}
-fatalities<-fatalities[with(fatalities,order(-INJURIES,EVTYPE)),]
-fatalities_plot<-fatalities[1:20,]
-fatalities_plot$EVTYPE[20]="OTHER"
-fatalities_plot$INJURIES[20]=sum(fatalities$INJURIES[20:length(fatalities)])
-fatalities_plot$FATALITIES[20]=sum(fatalities$FATALITIES[20:length(fatalities)])
-#fatalities_plot$EVTYPE<-as.factor(fatalities_plot$EVTYPE,ordered=FALSE)
-fatalities_plot$EVTYPE<-factor(fatalities_plot$EVTYPE,levels=unique(fatalities_plot$EVTYPE))
-plot(x=fatalities_plot$EVTYPE,y=fatalities_plot$INJURIES,log="y",type="h")
-#barplot(fatalities_plot)
+fatalities_plot<-fatalities[1:20,] #Keep only top 20
+#Create ordered factor for labels
+fatalities_plot$EVTYPE<-factor(
+  fatalities_plot$EVTYPE,
+  levels=unique(fatalities_plot$EVTYPE))
+linch <-  max(strwidth(fatalities_plot$EVTYPE, "inch")+0.4, na.rm = TRUE)
+par(mai=c(1.02,linch,0.82,0.42))
+fatalities_plot$INJURIES<-fatalities_plot$INJURIES #Convert to thousands
+axis_ticks=10^( #Create logarithmic axis ticks
+  seq(
+    floor(log10(min(fatalities_plot$INJURIES))), 
+      log10(max(fatalities_plot$INJURIES)),
+      length.out = 10))
+barplot(
+        fatalities_plot$INJURIES,
+        names=fatalities_plot$EVTYPE,
+        las=2,
+        log="x",
+        xaxt="n",
+        xaxt="n",
+        main="Total injuries per event type (Top 20)",
+        horiz=TRUE,
+        xlim=c(min(axis_ticks),max(axis_ticks))
+        )
+axis(1, #Add axis
+     at=axis_ticks,
+     las=2,
+     labels=prettyNum(
+       axis_ticks,
+       big.mark=",",
+       decimal.mark = ".",
+       digits=0,
+       scientific=FALSE)
+     )
+mtext("Number of injured, log scale", side=1, line=4)
 ```
+
+We see that Tornado,Thunderstorm wind and Flood Events have the biggest impact in terms of Injuries.
 
 ##Total economical damages per Event Type
 ### Ecnomical damage per event type
-Following graph shows the economical impact for 19 most impacting events, the other category aggregates all other results. The table in the *Detailed result* section shows all data
-```{r}
-damages_plot<-damages_agg[1:20,]
-damages_plot$EVTYPE[20]="OTHER"
-damages_plot$INJURIES[20]=sum(damages_agg$TOTALDMG[20:length(damages_agg)])
-damages_plot$EVTYPE<-factor(damages_plot$EVTYPE,levels=unique(damages_plot$EVTYPE))
-plot(x=damages_plot$EVTYPE,y=damages_plot$TOTALDMG,log="y",type="h")
+Following graph shows the economical impact for top 20 most impacting events. The table in the *Detailed result* section shows all data
+```{r fig.width=8}
+damages_plot<-damages_agg[1:20,] #Keep Top 20
+#Create ordered factor
+damages_plot$EVTYPE<-factor(
+  damages_plot$EVTYPE,
+  levels=unique(damages_plot$EVTYPE))
+linch <-  max(strwidth(damages_plot$EVTYPE, "inch")+0.4, na.rm = TRUE)
+par(mai=c(1.02,linch,0.82,0.42))
+damages_plot$TOTALDMG<-damages_plot$TOTALDMG/1000000 #Convert to millions
+axis_ticks=10^(seq(
+  floor(log10(min(damages_plot$TOTALDMG))), 
+  log10(max(damages_plot$TOTALDMG)), 
+  length.out = 10))
+barplot(
+  damages_plot$TOTALDMG,
+  names=damages_plot$EVTYPE,
+  horiz=TRUE,
+  las=2,
+  log="x",
+  xaxt="n",
+  main="Total damages per event type (Top 20)",
+  xlim=c(min(axis_ticks),max(axis_ticks)))
+axis(1,
+     at=axis_ticks,
+     las=2,
+     labels=prettyNum(
+       axis_ticks,
+       big.mark = ",",
+       digits=0,
+       scientific=FALSE)
+     )
+mtext("Total damage (million $) log scale", side=1, line=4)
 ```
+
+We see that Flood, Hurricane Tornado and Typhoon have the biggest economic impact.
 
 ##Detailed Results
 ###Total injuries per events type.
 ```{r results="asis"}
 library(xtable)
+#Format number in US Locale
+fatalities$INJURIES<-prettyNum(fatalities$INJURIES,big.mark=",",decimal.mark=".")
+fatalities$FATALITIES<-prettyNum(fatalities$FATALITIES,big.mark=",",decimal.mark=".")
+names(fatalities)<-c("Event","Injured","Fatalities")
 xt_fatal<-xtable(fatalities)
 print(xt_fatal,type="html",include.rownames=FALSE)
 ```
@@ -101,6 +190,13 @@ print(xt_fatal,type="html",include.rownames=FALSE)
 ###Table showing total damage per event type.
 ```{r results="asis"}
 library(xtable)
+damages_agg$TOTALDMG<-prettyNum(
+  damages_agg$TOTALDMG,
+  big.mark=",",
+  decimal.mark=".",
+  scientific=FALSE)
+names(damages_agg)<-c("Event","Damages ($)")
+damages_agg$TOTALDMG<-
 xt_damages<-xtable(damages_agg)
-print(xt_damages,type="html",include.rownames=FALSE)
+print(xt_damages,type="html",include.rownames=FALSE,digits=c(0,0))
 ```
